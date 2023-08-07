@@ -1,0 +1,929 @@
+---
+title: "primer_compare"
+output: html_document
+date: "2023-08-07"
+---
+
+```{r setup, include=FALSE}
+pacman::p_load(phyloseq,vegan, ggplot2,ggpubr,ggsci,ape,dplyr,xlsx,remedy,reshape2,stringr,corrplot,ggthemes,tidyr,tidyverse,foreach,microbiome,speedyseq)
+set.seed(1)
+```
+
+```{r distribution ASV in each phylum}
+physeq<-physeq_v4
+otu_table(physeq)<-abundances(physeq,transform = "compositional") %>% otu_table(taxa_are_rows = T)
+prevelancedf = apply(X = otu_table(physeq) ,MARGIN = 1, FUN = function(x){sum(x > 0)})
+# Add taxonomy and total read counts to this data.frame
+prevelancedf = data.frame(Prevalence = prevelancedf, Prevalence_Perc= (prevelancedf / nsamples(physeq) ) ,
+TotalAbundance = taxa_sums(physeq)/nsamples(physeq),
+tax_table(physeq))
+ztmp<-plyr::ddply(prevelancedf, "Phylum", function(df1){
+data.frame(mean_prevalence=mean(df1$Prevalence),total_abundance=sum(df1$TotalAbundance,na.rm = T),stringsAsFactors = F)
+}) ;ztmp<-ztmp %>% arrange(desc(total_abundance)); ztmp[1:16,]$Phylum
+phyla2Filter = ztmp[complete.cases(ztmp),][1:16,]$Phylum
+prevelancedf1 = subset(prevelancedf, Phylum %in% phyla2Filter )
+
+physeq<- physeq_v5v7
+otu_table(physeq)<-abundances(physeq,transform = "compositional") %>% otu_table(taxa_are_rows = T)
+physeq = subset_taxa(physeq, Phylum %in% phyla2Filter)
+prevelancedf = apply(X = otu_table(physeq) ,MARGIN = 1, FUN = function(x){sum(x > 0)})
+# Add taxonomy and total read counts to this data.frame
+prevelancedf = data.frame(Prevalence = prevelancedf, Prevalence_Perc= (prevelancedf / nsamples(physeq) ) ,
+TotalAbundance = taxa_sums(physeq)/nsamples(physeq),
+tax_table(physeq))
+prevelancedf2<-subset(prevelancedf, Phylum %in% phyla2Filter )
+prevelancedf1$primer<-"v5v7"
+prevelancedf2$primer<-"V4"
+prevelancedf_ori<-rbind((prevelancedf1),(prevelancedf2)); rm(prevelancedf1, prevelancedf2)
+```
+
+```{r distribution ASV in each phylum KL divergence}
+# df_pvalue_ori<-foreach(i=phyla2Filter,.combine = rbind,df_pvalue_rare) %dopar% {
+  for(i in phyla2Filter){
+  df<-prevelancedf_ori %>% filter(TotalAbundance>0,Phylum==i)
+  rownames(df)<-1:nrow(df)
+  df<-df %>% select(Prevalence_Perc, TotalAbundance, primer)
+  df1<-df %>% filter(primer=="V4")
+  df1<-df1[sample(nrow(df1), min(nrow(df1),250,df_pvalue_rare[df_pvalue_rare$Phylum==i,]$v4_taxa)),]
+
+  df2<-df %>% filter(primer=="v5v7")
+  df2<-df2[sample(nrow(df2), min(nrow(df2),250,df_pvalue_rare[df_pvalue_rare$Phylum==i,]$v5v7_taxa)),]
+  
+  tmp<-rbind(df1,df2)
+  df1<-df1[,1:2] %>% as.matrix; df1[,2]<-log10(df1[,2])
+  df2<-df2[,1:2] %>% as.matrix; df2[,2]<-log10(df2[,2])
+  library(rags2ridges)
+  KL<-KLdiv(colMeans(df1), colMeans(df2), covML(df1), covML(df2))
+  # gc()
+  # return(data.frame(Phylum=i,statistic=res$statistic,p.value=res$p.value,KL=KL,v4_taxa=nrow(df1),v5v7_taxa=nrow(df2)))
+  # return(data.frame(Phylum=i,KL=KL,v4_taxa=nrow(df1),v5v7_taxa=nrow(df2)))
+  list_res[[i]] <- data.frame(data.frame(Phylum=i,KL=KL,v4_taxa=nrow(df1),v5v7_taxa=nrow(df2)))
+};gc();df_pvalue_ori<-do.call(rbind,list_res)
+stopCluster(cl)
+df_pvalue_ori$KL-df_pvalue_rare$KL
+p_phylum_asv_dist<-ggplot(prevelancedf_ori, aes(TotalAbundance, Prevalence_Perc,color=primer)) +
+  geom_point(size = 2, alpha = 0.1) + geom_smooth(method="loess")+
+  scale_x_log10() +  xlab("Relative Abundance") + ylab(paste0("Prevalence")) +
+  facet_wrap(~Phylum, ncol = 8) + theme(legend.position="right") + 
+  scale_color_manual(values = c("#fe827c", "#80b9e1")) + theme_classic()+
+  scale_x_continuous(trans = "log10",breaks=c(1e-6,1e-4,1e-2),limits = c(1e-6,1e-1))+theme(legend.key = element_rect(color ="transparent"))+labs(color="")+
+  geom_text(mapping = aes(label=lab,x = x, y = y),
+            data= df_pvalue_ori %>% mutate(lab=paste0("KLD=", format.pval(KL,digits = 2)),x = 0.00001, y = Inf) , 
+            color = "#666666", hjust = 0, vjust = 1.4)
+
+
+
+
+
+physeq<-physeq_v4
+tmp1<-jintao::alpha(t_otu = t(otu_table(physeq)),phy_tree(physeq)) ; tmp1$primer<-"V4"; tmp1$sample_name<-rownames(tmp1)
+tmp1$hill_1<- hillR::hill_taxa(t(otu_table(physeq)), q = 1)
+tmp1$hill_2<- hillR::hill_taxa(t(otu_table(physeq)), q = 2)
+physeq<-physeq_v5v7
+tmp2<-jintao::alpha(t_otu = t(otu_table(physeq)),phy_tree(physeq));tmp2$primer<-"V5-V7";tmp2$sample_name<-rownames(tmp2)
+tmp2$hill_1<- hillR::hill_taxa(t(otu_table(physeq)), q = 1)
+tmp2$hill_2<- hillR::hill_taxa(t(otu_table(physeq)), q = 2)
+alpha_resuls<-rbind(tmp1,tmp2)
+alpha_resuls$Habitat<-group[(alpha_resuls$sample_name),]$Habitat
+
+
+tmp_compare<-compare_means(alpha_resuls,formula = Richness~primer, group.by = "Habitat" , p.adjust.method = "BH", method = "t.test") %>% mutate(p.adj = format.pval(p.adj, digits = 2))
+tmp_compare<-tmp_compare%>% left_join( alpha_resuls %>% group_by(Habitat) %>% summarise(max=max(Richness)*1.1) ) %>% mutate(y_pos = max)
+
+p_alpha<-ggboxplot(data = alpha_resuls,x="primer", y= "Richness",fill="primer",group= "Habitat"  ) +
+  facet_wrap(~Habitat,nrow = 1,scales="free") +
+  geom_signif(data=tmp_compare,  aes(xmin = group1, xmax = group2, annotations = p.format, y_position = y_pos), manual= TRUE) + 
+  # geom_line(aes(group = (sample_name)), colour = "#9C9C9C", alpha = 0.3) +
+  scale_y_continuous(limits = c(0, NA), expand = expand_scale(mult = c(0, 0.1))) +
+  labs(x = "", y = "Sob (q = 0)") + theme_light() + theme(axis.text.x = element_blank()) +
+  scale_fill_manual(values = c("#fe827c", "#80b9e1"))
+ 
+
+
+###
+venn_results<-list()
+tmp_results<-list()
+for (j in c("Phylum" , "Class" ,  "Order" ,  "Family" , "Genus" ,"Species")) {
+  tmp1<-tax_glom(physeq_v4,j, NArm=TRUE) ; tmp1 <- prune_taxa(!str_detect(tax_table(tmp1)[,j],"NA|Incertae_Sedis|Unknown") ,tmp1)
+  tmp2<-tax_glom(physeq_v5v7,j, NArm=TRUE) ; tmp2 <- prune_taxa(!str_detect(tax_table(tmp2)[,j],"NA|Incertae_Sedis|Unknown") ,tmp2)
+  
+  tmp1<-aggregate_taxa(tmp1, j)
+  tmp2<-aggregate_taxa(tmp2, j)
+  tmp1<-tmp1 %>% change_physeq_otu2rank_sample_name(Change_rank = T,which_rank = "unique")
+  tmp2<-tmp2 %>% change_physeq_otu2rank_sample_name(Change_rank = T,which_rank = "unique")
+  for (i in levels(group$Habitat)){
+    tmp1_name<- subset_samples(tmp1,Habitat==i) ; tmp1_name<-prune_taxa(taxa_sums(tmp1_name)>10, tmp1_name) %>% taxa_names()
+    tmp2_name<- subset_samples(tmp2,Habitat==i) ; tmp2_name<-prune_taxa(taxa_sums(tmp2_name)>10, tmp2_name) %>% taxa_names()
+    tmp_results[[i]]<- data.frame(Levels=j, Habitat=i,which=c("Both","v4_only","v5v7_only"), value= c(
+      length(intersect(tmp1_name,tmp2_name)),   length(tmp1_name)- length(intersect(tmp1_name,tmp2_name)), length(tmp2_name)-length(intersect(tmp1_name,tmp2_name))
+    ))}
+  venn_results[[j]]<-do.call(rbind, tmp_results)
+}
+df_venn<-do.call(rbind,venn_results)
+df_venn$Habitat<- factor(df_venn$Habitat, levels=(c("Water", "Sediment", "Soil","Leaf","Gut")))
+df_venn$Levels<-factor(df_venn$Levels,levels=rev(c("Phylum" , "Class" ,  "Order" ,  "Family" , "Genus", "Species")))
+df_venn$which <-factor(df_venn$which, levels = c("v4_only","Both","v5v7_only") %>% rev() )
+
+p_venn<-ggplot(df_venn) +
+  aes( y= Levels ,weight = value, fill= which) +
+  geom_bar(position="fill") +  facet_wrap(~Habitat, ncol=5) +
+  theme_minimal() + theme(axis.text.x = element_blank()) +labs(x="", fill="Taxa",fill="") +
+  theme(strip.background = element_blank(), strip.text.x = element_blank(), plot.margin=unit(c(-0.5,1,1,1), "cm")) +
+  scale_fill_manual(values = c('v4_only'="#fe827c",'Both'="#81a4b8",'v5v7_only'= "#80b9e1") %>% rev(),
+                    breaks=c('v4_only', 'Both', 'v5v7_only'),
+                    labels=c( 'V4 only', 'Both','V5-V7 only' )) ; p_venn
+```
+
+```{r composition}
+rank="Phylum"
+tmp1<-physeq_v4 %>% 
+  speedyseq::tax_glom(taxrank = rank,NArm = F) %>%
+  merge_samples2(c("Habitat"),mean) 
+
+tmp2<-physeq_v5v7 %>% 
+  speedyseq::tax_glom(taxrank = rank,NArm = F) %>%
+  merge_samples2(c("Habitat"),mean) 
+sample_names(tmp1)<-paste0(sample_names(tmp1),"V4")
+sample_names(tmp2)<-paste0(sample_names(tmp2),"V5-V7")
+
+merge_phyloseq_union(tmp1,tmp2) %>% 
+  change_rare_phylum_name(max_number = 15,level = rank,relative = T,in_eachgroup = "Habitat") %>% 
+  select_tax_table(!!rank) %>% aggregate_taxa(level = rank) %>% 
+  plot_composition(group_by = "Habitat")+
+  scale_fill_manual(values=colorRampPalette((pal_simpsons("springfield")(16)))(18))+
+  theme_light()+
+  labs(x="") + scale_x_discrete(labels=c(rep(c("V4","V5-V7"),5)))
+
+ggsave("p_composition_update.pdf",height =5,width = 10)
+```
+
+```{r beta NMDS}
+############ NMDS
+tmp1<-physeq_v4_genus
+tmp2<-physeq_v5v7_genus
+level="Genus"
+physeq<-merge_phyloseq_union( change_physeq_otu2rank_sample_name(tmp1, T, T, level, "_v4" ,add_additional_col="primers",col_info="v4" ),
+                              change_physeq_otu2rank_sample_name(tmp2, T, T, level, "_v5v7",add_additional_col="primers",col_info="v5v7")
+)
+otu_table(physeq)<- microbiome::abundances(physeq,"compositional") %>% otu_table(taxa_are_rows = T)
+pp<-plot_ordination(physeq, ordinate(physeq, method = "NMDS", distance = "bray") , type="samples", shape="Habitat",
+                    color="primers")+geom_point(size=3,alpha=0.5)+theme_bw() +stat_ellipse() 
+# pp+geom_text(aes(label =  ALL_TYPE),alpha=0.5)  + scale_color_manual(values = c("#fe827c", "#80b9e1")) +
+#   theme_bw() + theme(axis.text = element_text(size = 5)) +
+#   labs(x = "NMDS1", y = "NMDS2") + theme(axis.title = element_text(size = 8), axis.text = element_blank())
+p_NMDS_all<-pp + scale_color_manual(values = c("#fe827c", "#80b9e1")) +
+  theme_bw() + theme(axis.text = element_text(size = 5)) +
+  labs(x = "NMDS1", y = "NMDS2") + 
+  theme(axis.title = element_text(size = 8), axis.text = element_text(size = 4)) +
+  theme(plot.margin =unit(c(0.8,0.2,0.1,1), "cm") ) +
+  theme(legend.position="none",  axis.text=element_blank(),axis.ticks =element_blank()) ;p_NMDS_all
+
+adonis2( phyloseq::distance(physeq, method = "bray") ~ Habitat*primers+Habitat*Location, data =  as(sample_data(physeq), "data.frame"), perm=999)
+
+##tSNE
+# a<-phylosmith::tsne_phyloseq(physeq,"primers",method = "bray",perplexity = 100,circle = F)
+# tmp<-a$data
+# ggplot(tmp,aes(x=tSNE1,y=tSNE2,color=primers,shape=Habitat))+geom_point(size=3,alpha=0.5) + scale_color_manual(values = c("#fe827c", "#80b9e1")) +
+#   theme_bw() + theme(axis.text = element_text(size = 5)) +stat_ellipse()  +
+#   scale_x_continuous(expand = expansion(mult = .1)) + scale_y_continuous(expand = expansion(mult = .2))+ 
+#   labs(x="tSNE1",y="tSNE1")
+
+shape_list<-data.frame(row.names = levels(group$Habitat), shape=c(16,17,15,3,7))
+NMDS_results<-list()
+for (i in levels(group$Habitat)){
+  tmp_physeq_sub<- subset_samples(physeq,Habitat==i) ; tmp_physeq_sub<-prune_taxa(taxa_sums(tmp_physeq_sub)>0, tmp_physeq_sub) 
+  a<-adonis2( phyloseq::distance(tmp_physeq_sub, method = "bray") ~ primers, data =  as(sample_data(tmp_physeq_sub), "data.frame"), perm=99999)
+  print(a$`Pr(>F)`[1])
+  print(a$R2[1])
+  
+  tmp_data<-plot_ordination(tmp_physeq_sub,suppressMessages(ordinate(tmp_physeq_sub, method = "NMDS", distance = "bray"))  , type="samples", shape="Habitat",color="primers")
+  tmp_data<-tmp_data$data
+  tmp_r<-format.pval(a$R2[1],digits = 2) %>% as.numeric()
+  NMDS_results[[i]]<-ggscatter(tmp_data,x="NMDS1",y="NMDS2",color="primers",ellipse = T, mean.point = TRUE,star.plot = TRUE, shape=shape_list[i,]) + scale_color_manual(values = c("#fe827c", "#80b9e1")) +
+    theme_bw() + theme(axis.text = element_text(size = 5))  +
+    scale_x_continuous(expand = expansion(mult = .15)) + scale_y_continuous(expand = expansion(mult = .35))+ 
+    labs(x="NMDS1",y="NMDS2", title=i)+ theme() +
+    ggplot2::annotate(geom = "text", label = paste("italic(p)==", format.pval(a$`Pr(>F)`[1],digits = 2)),parse=T, x = -Inf, y = Inf, color = "#666666",size = 2.5,hjust = -0.1, vjust = 1.4) +
+    ggplot2::annotate(geom = "text", label = paste("italic(R)^2==",tmp_r),parse=T, x = -Inf, y = Inf, color = "#666666",size = 2.5,fontface = "italic",hjust = -0.1, vjust = 2.4) +
+    theme(plot.title = element_textbox(hjust = 0.5, margin = margin(t = 5, b = 5) ,size=8),
+          legend.position = "none",
+          axis.title=element_text(size=5), 
+          axis.text =element_blank(),axis.ticks = element_blank()) 
+}# ggarrange(NMDS_results[[1]],NMDS_results[[2]],NMDS_results[[3]],NMDS_results[[4]],NMDS_results[[5]], ncol = 5)
+
+############ protest
+source("D:/Myfile/Research/Script/amplicon_data_analysis/protest_between_physeq_ineachgroup.R")
+list_protest<-protest_between_physeq_ineachgroup(physeq_v4_genus,physeq_v5v7_genus,group_head = "Habitat",group_name = group_name, perm = 99999, shape_list=shape_list[group_name,])
+
+
+p_NMDS_protest<-cowplot::plot_grid(
+  NMDS_results[[1]],NMDS_results[[2]],NMDS_results[[3]],NMDS_results[[4]],NMDS_results[[5]],
+  list_protest[[1]],list_protest[[2]],list_protest[[3]],list_protest[[4]],list_protest[[5]],
+  ncol=5, align='v', rel_heights =c(1.1,1))
+# 
+# ggsave(ggarrange(p_NMDS_all,p_NMDS_protest,nrow = 1,widths =c(2,5)) , filename = "NMDS_all_genus_update.pdf",height=4,width=11)
+
+
+
+###使用都有的属
+keep_taxa<-intersect(tax_table(tmp1)[,level],tax_table(tmp2)[,level])
+physeq<- prune_taxa(keep_taxa, physeq)
+otu_table(physeq)<- microbiome::abundances(physeq,"compositional") %>% otu_table(taxa_are_rows = T)
+pp<-plot_ordination(physeq, ordinate(physeq, method = "NMDS", distance = "bray") , type="samples", shape="Habitat",color="primers")+geom_point(size=3,alpha=0.5)+theme_bw() +stat_ellipse() 
+p_NMDS_all_genus<-pp + scale_color_manual(values = c("#fe827c", "#80b9e1")) +
+  theme_bw() + theme(axis.text = element_text(size = 5)) +
+  labs(x = "NMDS1", y = "NMDS2") + 
+  theme(axis.title = element_text(size = 8), legend.position = "right", 
+        axis.text=element_blank(),axis.ticks =element_blank()) +
+  theme(plot.margin =unit(c(0.8,0.2,0.1,1), "cm") ) ;p_NMDS_all_genus
+ggsave("figureS_NMDS_all_genus_update.pdf",p_NMDS_all_genus,height = 4.8,width = 6)
+```
+
+```{r betapart}
+
+########################## beta pattern
+library(ggpattern)
+group_head<-"Habitat"
+group_name<-c("Water", "Sediment", "Soil","Leaf","Gut")
+pri_pri<-c("V4","V5-V7");names(pri_pri)<-c("v4","v5v7")
+library(foreach)
+beta_pattern_results <- foreach(pri=c("v4","v5v7"),.combine = rbind) %do% {
+  results<-list()
+  physeq<-list_physeq[[pri]]
+  for (i in group_name) {
+    otu<-prune_samples( sample_data( physeq )[[ group_head ]]==i,physeq) %>% otu_table() %>% as.data.frame()
+    otu<-t(otu) 
+    results[[i]]<-beta_pattern(otu,method = "POD") %>% mutate(Habitat=i)
+  }
+  beta_pattern_results<- do.call(rbind, results) %>% as.data.frame() %>%  mutate(primer= pri_pri[pri])
+  return(beta_pattern_results)
+}
+
+beta_pattern_results<-beta_pattern_results %>% mutate(Habitat = factor(Habitat, levels = group_name))
+df_beta_pattern_results<- melt(beta_pattern_results,id.vars = c("Habitat","primer"))
+df_beta_pattern_results$primer<-factor(df_beta_pattern_results$primer, levels=c("V5-V7","V4"))
+
+# p_beta_pattern<- ggbarplot(data = df_beta_pattern_results, x = "primer", y = "value", fill = "variable", group = "Habitat", color="white") + facet_wrap(~Habitat, ncol = 1, strip.position = "left") +
+#   coord_flip() +
+#   scale_y_continuous(breaks = seq(0, 1, by = 0.25)) +
+#   labs(y = "Relative Complement", x = "",fill="")  + theme_light() + theme(legend.position = "top") +
+#   scale_fill_manual(values=rev(c("#d32028","#385989","#7fa5b8"))) 
+# + scale_fill_npg() 
+# + geom_line(aes(group= (sample_name)),colour="#9C9C9C",alpha=0.4)
+p_beta_pattern<- ggplot(data = df_beta_pattern_results,aes( x = primer, y = value, fill=variable, group = Habitat, pattern=variable)) +
+  geom_bar_pattern(position = "stack",
+                   color = "#515151", 
+                   pattern_fill = "#515151",
+                   pattern_angle = 45,
+                   pattern_spacing =0.10 ,
+                   stat="identity",size=0.5) + facet_wrap(~Habitat, ncol = 1, strip.position = "left") + 
+  coord_flip() +
+  scale_y_continuous(breaks = seq(0, 1, by = 0.25)) +
+  labs(y = "Relative Complement", x = "",fill="")  + theme_light() + theme(legend.position = "top")  +
+  theme(plot.background = element_rect(fill = "transparent",colour = NA))+ #+ scale_fill_manual( values =  c("Repl"="#a1b6ed", "RichDif"="#ecbdb5", "Similarity"="#b2ee9a"))
+  scale_fill_manual( values =  c("Repl"="#a1b6ed", "RichDif"="#ecbdb5", "Similarity"="#b2ee9a") %>% rev())+guides(pattern=F)
+
+group_head<-"Habitat"
+group_name<-c("Water", "Sediment", "Soil","Leaf","Gut")
+
+library(foreach)
+beta_pattern_results <- foreach(pri=c("v4","v5v7"),.combine = rbind) %do% {
+  results<-list()
+  physeq<-list_physeq[[pri]]
+  for (i in group_name) {
+    otu<-prune_samples( sample_data( physeq )[[ group_head ]]==i,physeq) %>% otu_table() %>% as.data.frame()
+    otu<-t(otu) 
+    results[[i]]<-beta_pattern(otu,method = "SET") %>% mutate(Habitat=i)
+  }
+  beta_pattern_results<- do.call(rbind, results) %>% as.data.frame() %>%  mutate(primer= pri_pri[pri])
+  return(beta_pattern_results)
+}
+
+beta_pattern_results<-beta_pattern_results %>% mutate(Habitat = factor(Habitat, levels = group_name))
+df_beta_pattern_results<- melt(beta_pattern_results,id.vars = c("Habitat","primer"))
+df_beta_pattern_results$primer<-factor(df_beta_pattern_results$primer, levels=c("V5-V7","V4"))
+
+# p_beta_pattern_SET<- 
+#   ggbarplot(data = df_beta_pattern_results, x = "primer", y = "value", fill = "variable", group = "Habitat", color="white") + facet_wrap(~Habitat, ncol = 1, strip.position = "left") + 
+#   coord_flip() +
+#   scale_y_continuous(breaks = seq(0, 1, by = 0.25)) +
+#   labs(y = "Relative Complement", x = "",fill="")  + theme_light() + theme(legend.position = "top") +
+#   scale_fill_manual(values=rev(c("#a9a9a9","#e5ad2e","#7fa5b8"))) +theme(plot.background = element_rect(fill = "transparent",colour = NA))
+
+p_beta_pattern_SET<- ggplot(data = df_beta_pattern_results,aes( x = primer, y = value, fill=variable, group = Habitat, pattern=variable)) +
+  geom_bar_pattern(position = "stack",
+                   color = "#515151", 
+                   pattern_fill = "#515151",
+                   pattern_angle = 45,
+                   pattern_spacing =0.10 ,
+                   stat="identity",size=0.5) + facet_wrap(~Habitat, ncol = 1, strip.position = "left")+ 
+  coord_flip() +
+  scale_y_continuous(breaks = seq(0, 1, by = 0.25)) +
+  labs(y = "Relative Complement", x = "",fill="")  + theme_light() + theme(legend.position = "top")  +
+  theme(plot.background = element_rect(fill = "transparent",colour = NA)) +
+  scale_fill_manual(values=rev(c("#a9a9a9","#e5ad2e","#7fa5b8")))+guides(pattern=F)
+
+
+
+```
+
+```{r adonis}
+# list_adonis<-list()
+# physeq<-physeq_v4
+# list_adonis[[1]]<-adonis2( phyloseq::distance(physeq, method = "bray") ~ Habitat*Location, data =  as(sample_data(physeq), "data.frame"), perm=999)$R2
+# list_adonis[[2]]<-adonis2( phyloseq::distance(physeq, method = "jaccard") ~ Habitat*Location, data =  as(sample_data(physeq), "data.frame"), perm=999)$R2
+# list_adonis[[3]]<-adonis2( phyloseq::distance(physeq, method = "wunifrac") ~ Habitat*Location, data =  as(sample_data(physeq), "data.frame"), perm=999)$R2
+# list_adonis[[4]]<-adonis2( phyloseq::distance(physeq, method = "unifrac") ~ Habitat*Location, data =  as(sample_data(physeq), "data.frame"), perm=999)$R2
+# 
+# physeq<-physeq_v5v7
+# list_adonis[[5]]<-adonis2( phyloseq::distance(physeq, method = "bray") ~ Habitat*Location, data =  as(sample_data(physeq), "data.frame"), perm=999)$R2
+# list_adonis[[6]]<-adonis2( phyloseq::distance(physeq, method = "jaccard") ~ Habitat*Location, data =  as(sample_data(physeq), "data.frame"), perm=999)$R2
+# list_adonis[[7]]<-adonis2( phyloseq::distance(physeq, method = "wunifrac") ~ Habitat*Location, data =  as(sample_data(physeq), "data.frame"), perm=999)$R2
+# list_adonis[[8]]<-adonis2( phyloseq::distance(physeq, method = "unifrac") ~ Habitat*Location, data =  as(sample_data(physeq), "data.frame"), perm=999)$R2
+results_adonis<-do.call(rbind, list_adonis) %>% as.data.frame()
+colnames(results_adonis)<-c("Habitat","Site","Interaction Effect","Residual","ALL")
+results_adonis$primers<-c("V4","V4","V4","V4","V5-V7","V5-V7","V5-V7","V5-V7")
+results_adonis$Dissimilarity<-rep(c("Bray-Curtis","Jaccard","Weighted UniFrac", "Unweighted UniFrac"),2)
+results_adonis<-results_adonis[,] %>% select(-ALL,-Residual) %>% melt(id.vars=c("Dissimilarity", "primers"))
+results_adonis$value<-results_adonis$value*100
+# results_adonis$variable<-factor(results_adonis$variable, levels= c("Inter-Site","Interaction Effect","Inter-Habitat"))
+results_adonis$Dissimilarity<-factor(results_adonis$Dissimilarity, levels=c("Bray-Curtis","Jaccard","Weighted UniFrac", "Unweighted UniFrac")   )
+results_adonis$primers<-factor(results_adonis$primers, levels=c("V5-V7","V4"))
+p_adonis<-ggplot(results_adonis %>%  filter(variable!="Interaction Effect")) +
+  aes(x = primers, fill = variable, weight = value) +
+  coord_flip()+
+  geom_bar(width = 0.7) +
+  scale_fill_hue(direction = 1) +
+  theme_light() + scale_y_continuous(limits = c(0,70), expand = c(0,0)) +
+  facet_wrap(~Dissimilarity, ncol = 1,strip.position = "left") +labs(x="",y="Relative Contribution (%)", fill="")+
+  scale_fill_manual(values=c("Site"="#b8e087","Habitat"="#4cac26")) +
+  theme(legend.position = "top") ; p_adonis
+
+
+tmp<-ggarrange(ggarrange(p_NMDS_all,p_NMDS_protest,nrow = 1,widths =c(2.1,5)), 
+               ggarrange(p_adonis, p_beta_pattern, p_beta_pattern_SET, nrow = 1),
+               ncol = 1,heights = c(1,2),align = "h"
+)+
+  theme(plot.margin = margin(1,1,1,1, "cm")) 
+ggsave("figure2_update.pdf",plot = tmp,height = 10,width = 11.5)
+
+
+
+
+
+# tmp1<-physeq_v4_genus
+# tmp2<-physeq_v5v7_genus
+# level="Genus"
+# physeq<-merge_phyloseq_union( change_physeq_otu2rank_sample_name(tmp1, T, T, level, "_v4" ,add_additional_col="primers",col_info="v4" ),
+#                               change_physeq_otu2rank_sample_name(tmp2, T, T, level, "_v5v7",add_additional_col="primers",col_info="v5v7")
+# )
+# otu_table(physeq)<- microbiome::abundances(physeq,"compositional") %>% otu_table(taxa_are_rows = T)
+# tmp<-adonis2( phyloseq::distance(physeq, method = "bray") ~ Habitat+Location+primers+Habitat/Location+Habitat/primer, data =  as(sample_data(physeq), "data.frame"), perm=9999)
+# write.csv(tmp,file = "adonis_all.csv")
+```
+
+```{r niche characterization}
+list_physeq<-list();list_physeq[["v4"]]<-physeq_v4;list_physeq[["v5v7"]]<-physeq_v5v7
+niche_b_table<-list()
+group_head<-"Habitat"
+group_name<-c("Water", "Sediment", "Soil","Leaf","Gut")
+library(spaa)
+for( pri in c("v4", "v5v7")){
+  physeq<- list_physeq[[pri]] #%>% rarefy_physeq(depth = 10000)
+  niche_b_table[[pri]]<-list()
+  for (i in group_name) {
+    tmp<-prune_samples( sample_data( physeq )[[ group_head ]]==i,physeq)
+    tmp<-prune_taxa(taxa_sums(tmp)>0, tmp)
+    t_otu<-as.data.frame(t(otu_table(tmp)))
+    t_otu <- t_otu[, colMeans(t_otu/(rowSums(t_otu))) > 2e-05]
+    niche_b_table[[pri]][[i]]<-spaa::niche.width(t_otu, method = c("levins")) %>% t() %>% as.data.frame() %>% mutate(Habitat=i,primer=pri_pri[pri])
+    print(i)
+  }
+}
+
+df_niche<-rbind(do.call(rbind, niche_b_table[[1]] ),  do.call(rbind, niche_b_table[[2]] ))
+tmp_compare<-compare_means(df_niche,formula = V1~primer, group.by = "Habitat" , p.adjust.method = "BH", method = "t.test") %>% mutate(p.adjust = format.pval(p.adj, digits = 2))
+tmp_compare<-tmp_compare %>% left_join( df_niche %>% group_by(Habitat) %>%  dplyr::summarise(max=max(V1)*1.1) ) %>% mutate(y_pos = max)
+ggscatter(data = df_niche, x = "primer", y = "V1", group = "Habitat", position = "jitter",alpha=0.05) + 
+  geom_violin(aes(fill=primer),outlier.alpha = 0) +
+  # geom_boxplot(aes(fill = primer),outlier.alpha = 0) +
+  scale_y_continuous(limits = c(0,NA),expand = expand_scale(mult = c(0, 0.1))) +
+  facet_wrap(~Habitat, scales = "free", ncol = 5) +
+  geom_signif(data = tmp_compare, aes(xmin = group1, xmax = group2, annotations = p.format, y_position = y_pos), manual = TRUE) +
+  labs(x = "", y = "Niche Breadth") +
+  stat_summary(geom = "point",fun = "mean",col = "white",size = 1.5,shape = 3,fill = "black") +theme_light()+ theme(legend.position = "top") +
+  scale_color_manual(values=c("#fe827c", "#80b9e1"))
+ggsave("figureS_niche_breadth.pdf", height=4, width=8)
+
+
+
+
+
+# 
+niche_Bcom_table<-list()
+niche_Ocom_table<-list()
+
+for( pri in c("v4", "v5v7")){
+  physeq<- list_physeq[[pri]] %>% rarefy_physeq(depth = 10000)
+  niche_Bcom_table[[pri]]<-list()
+  for (i in group_name) {  #i<-"Gut" for test
+    tmp<-prune_samples( sample_data( physeq )[[ group_head ]]==i,physeq)
+    tmp<-prune_taxa(taxa_sums(tmp)>0, tmp)
+    t_otu<-as.data.frame(t(otu_table(tmp)))
+    niche_Bcom_table[[pri]][[i]]<-Bcom(t(t_otu))  %>% as.matrix() %>% as.data.frame() %>% mutate(Habitat=i,primer=pri)
+    print(i)
+    niche_Ocom_table[[pri]][[i]]<-Ocom(t(t_otu),cores = 24)  %>% as.matrix() %>% as.data.frame() %>% mutate(Habitat=i,primer=pri_pri[pri])
+    print(i)
+  }
+}
+
+
+
+df_niche<-rbind(do.call(rbind, niche_Bcom_table[[1]] ),  do.call(rbind, niche_Bcom_table[[2]] ))
+df_niche$Habitat<-factor(df_niche$Habitat,levels=group_name)
+tmp_compare<-compare_means(df_niche,formula = V1~primer, group.by = "Habitat" , p.adjust.method = "BH", method = "t.test") %>% mutate(p.adj = format.pval(p.adj, digits = 2))
+tmp_compare<-tmp_compare %>% left_join( df_niche %>% group_by(Habitat) %>%  dplyr::summarise(max=max(V1)*1.1) ) %>% mutate(y_pos = max)
+p_niche_bcom<-ggscatter(data = df_niche, x = "primer", y = "V1", group = "Habitat", position = "jitter",alpha=0.05) + 
+  geom_boxplot(aes(fill = primer),outlier.alpha = 0) +
+  scale_y_continuous(limits = c(0,NA),expand = expand_scale(mult = c(0, 0.1)))+
+  facet_wrap(~Habitat,ncol = 5,scales = "free") +
+  geom_signif(data = tmp_compare, aes(xmin = group1, xmax = group2, annotations = p.adj, y_position = y_pos), manual = TRUE) +
+  labs(x = "", y = "Habitat niche breadth (Bcom)") +
+  stat_summary(geom = "point",fun = "mean",col = "white",size = 1.5,shape = 3,fill = "black") +theme_light()+ theme(legend.position = "top")+ scale_fill_manual(values = c("#fe827c", "#80b9e1"))
+
+
+##
+df_niche<-rbind(do.call(rbind, niche_Ocom_table[[1]] ),  do.call(rbind, niche_Ocom_table[[2]] ))
+df_niche$Habitat<-factor(df_niche$Habitat,levels=group_name)
+tmp_compare<-compare_means(df_niche,formula = V1~primer, group.by = "Habitat" , p.adjust.method = "BH", method = "t.test") %>% mutate(p.adj = format.pval(p.adj, digits = 2))
+tmp_compare<-tmp_compare %>% left_join( df_niche %>% group_by(Habitat) %>%  dplyr::summarise(max=max(V1)*1.1) ) %>% mutate(y_pos = 0.75)
+p_niche_ocom<-ggscatter(data = df_niche, x = "primer", y = "V1", group = "Habitat", position = "jitter",alpha=0.05) + 
+  geom_boxplot(aes(fill = primer),outlier.alpha = 0) +
+  scale_y_continuous(limits = c(0,0.8),expand = expand_scale(mult = c(0, 0.05)))+
+  facet_wrap(~Habitat,ncol = 5,scales = "free") +
+  geom_signif(data = tmp_compare, aes(xmin = group1, xmax = group2, annotations = p.adj, y_position = y_pos), manual = TRUE) +
+  labs(x = "", y = "Habitat niche overlap (Ocom)") +
+  stat_summary(geom = "point",fun = "mean",col = "white",size = 1.5,shape = 3,fill = "black") +theme_light()+ theme(legend.position = "top")+ scale_fill_manual(values = c("#fe827c", "#80b9e1"))
+
+tmp<-ggarrange(p_niche_bcom,p_niche_ocom,ncol = 1, common.legend =  T, align = "hv" )
+ggsave("Figure_niche_update.pdf", plot = tmp,height = 6,width = 8)
+
+
+i<-5
+a<-niche_Ocom_table[[1]][[2]] 
+tmp<-cbind(a,data.frame(group=group[rownames(a),]$ALL_TYPE) )
+compare_means(data=tmp,V1~group)
+a<-niche_Ocom_table[[2]][[2]] 
+tmp<-cbind(a,data.frame(group=group[rownames(a),]$ALL_TYPE) )
+compare_means(data=tmp,V1~group)
+
+a<-rbind(niche_Ocom_table[[1]][["Sediment"]], niche_Ocom_table[[2]][["Sediment"]])
+rstatix::cohens_d(V1~primer,data=a)
+```
+
+```{r assembly}
+qpen_results<-list()
+qpen_table<-list()
+tmp_qpen<-list()
+library(iCAMP)
+pri<-"v4"
+physeq<-physeq_v4
+qpen_table[[pri]]<-list()
+group <- sample_data(physeq) %>% as.matrix() %>% as.data.frame()
+group_name <- unique(group[, group_head])
+group_head<-"Habitat"
+for (i in group_name) {
+  tmp<-prune_samples( sample_data( physeq )[[ group_head ]]==i,physeq)
+  tmp<-prune_taxa(taxa_sums(tmp)>0, tmp)
+  phy<-phy_tree(tmp)
+  t_otu<-as.data.frame(t(otu_table(tmp)))
+  print(i)
+  tmp_qpen[[i]]<-qpen(t_otu,tree=phy,nworker=12,memory.G	=100, output.detail	=T)
+  qpen_table[[pri]][[i]]<-tmp_qpen[[i]]$ratio
+}
+qpen_results[[pri]]<-tmp_qpen
+qpen_table[[pri]]<-do.call(rbind,qpen_table[[pri]])[,1:5]
+qpen_table[[pri]]$primer<-pri; qpen_table[[pri]]$Habitat<-rownames(qpen_table[[pri]])
+
+library(iCAMP)
+pri<-"v5v7"
+physeq<-physeq_v5v7 
+qpen_table[[pri]]<-list()
+group <- sample_data(physeq) %>% as.matrix() %>% as.data.frame()
+group_name <- unique(group[, group_head])
+group_head<-"Habitat"
+for (i in group_name) {
+  tmp<-prune_samples( sample_data( physeq )[[ group_head ]]==i,physeq)
+  tmp<-prune_taxa(taxa_sums(tmp)>0, tmp)
+  phy<-phy_tree(tmp)
+  t_otu<-as.data.frame(t(otu_table(tmp)))
+  print(i)
+  tmp_qpen[[i]]<-qpen(t_otu,tree=phy,nworker=16,memory.G	=100, output.detail	=T)
+  qpen_table[[pri]][[i]]<-tmp_qpen[[i]]$ratio
+}
+qpen_results[[pri]]<-tmp_qpen
+qpen_table[[pri]]<-do.call(rbind,qpen_table[[pri]])[,1:5]
+qpen_table[[pri]]$primer<-pri; qpen_table[[pri]]$Habitat<-rownames(qpen_table[[pri]])
+rm(tmp_qpen)
+
+
+##
+## 
+group<-meta(physeq_v4)
+
+tmp<-list()
+Habitat<-levels(meta(physeq_v4)$Habitat)
+for(i in 1:2){
+  for(j in 1:5){
+    pri<-c("v4", "v5v7")[i]
+    tmp[[ (i-1)*5+j ]]<- qpen_results[[pri]][[Habitat[j]]]$result
+    tmp[[ (i-1)*5+j ]]$primer<-pri_pri[pri]
+    tmp[[ (i-1)*5+j ]]$Habitat<-Habitat[j]
+  }
+}
+
+
+
+
+
+df_qpen<-do.call(rbind,tmp)
+
+
+df_qpen$Habitat <- factor(df_qpen$Habitat, levels = (levels(group$"Habitat")))
+df_qpen$primer <- factor(df_qpen$primer, levels=rev(pri_pri))
+
+tmp_compare1 <- compare_means(df_qpen, formula = bNTI ~ primer, group.by = "Habitat", p.adjust.method = "BH", paired = T,method = "t.test") %>%
+  mutate(y_pos = 1.1, p.adj = format.pval(p.adj, digits = 2)) %>%
+  mutate(max = 5) %>%
+  mutate(y_pos = max)
+
+p_bnti<-ggscatter(data = df_qpen, x = "primer", y = "bNTI", group = "Habitat", position = "jitter",alpha=0.05) + 
+  geom_boxplot(aes(fill = primer),outlier.alpha = 0) +
+  scale_y_continuous(expand = c(0,3))+
+  facet_wrap(~Habitat, ncol = 1, strip.position = "left") +
+  geom_signif(data = tmp_compare1, aes(xmin = group1, xmax = group2, annotations = p.adj, y_position = y_pos), manual = TRUE ) +
+  coord_flip() +
+  labs(x = "", y = "βNTI", fill="") +
+  stat_summary(geom = "point",fun = "mean",col = "white",size = 1.5,shape = 3,fill = "black") +theme_light()+ theme(legend.position = "top")+
+  scale_fill_manual(values = rev(c("#fe827c", "#80b9e1")))+guides(fill=guide_legend(title = ""))+
+  geom_hline(yintercept=c(1.96,-1.96), linetype="dashed")+
+  scale_fill_manual(values = c('V4'="#fe827c",'V5-V7'= "#80b9e1") ,
+                    breaks=c('V4', 'V5-V7'),
+                    labels=c('V4', 'V5-V7'))
+
+
+#RCbray
+tmp_compare2 <- compare_means(df_qpen, formula = RC ~ primer, group.by = "Habitat", p.adjust.method = "BH", paired = T,method = "t.test") %>%
+  mutate(y_pos = 1.1, p.adj = format.pval(p.adj, digits = 2)) %>%
+  mutate(  max = 1.2   ) %>%  # df_qpen %>% group_by(Habitat) %>% summarise(max = 1.2) 
+  mutate(y_pos = max)
+
+p_rcbray<-ggscatter(data = df_qpen, x = "primer", y = "RC", group = "Habitat", position = "jitter",alpha=0.05) + 
+  geom_boxplot(aes(fill = primer),outlier.alpha = 0) +
+  scale_y_continuous(limits = c(-1.1,1.3)) + 
+  facet_wrap(~Habitat, ncol = 1, strip.position = "left") +
+  geom_signif(data = tmp_compare2, aes(xmin = group1, xmax = group2, annotations = p.adj, y_position = y_pos), manual = TRUE) +
+  coord_flip() +
+  labs(x = "", y = "RCI", fill="") +
+  stat_summary(geom = "point",fun = "mean",col = "black",size = 1.5,shape = 3,fill = "black") +theme_light()+ theme(legend.position = "top")+
+  scale_fill_manual(values = rev(c("#fe827c", "#80b9e1")))+guides(fill=guide_legend(title = ""))+
+  geom_hline(yintercept=c(0.95,-0.95), linetype="dashed")+
+  scale_fill_manual(values = c('V4'="#fe827c",'V5-V7'= "#80b9e1") ,
+                    breaks=c('V4', 'V5-V7'),
+                    labels=c('V4', 'V5-V7'))
+
+##
+qpen_table[["V4"]]$Habitat<-rownames(qpen_table[["V4"]])
+qpen_table[["V5-V7"]]$Habitat<-rownames(qpen_table[["V5-V7"]])
+df_qpen_process<- do.call(rbind,qpen_table) %>% melt()
+df_qpen_process$variable<-str_replace(df_qpen_process$variable,"[.]", " ")
+df_qpen_process$Habitat <- factor(df_qpen_process$Habitat, levels = (levels(group$"Habitat")))
+df_qpen_process$primer <- factor(df_qpen_process$primer, levels=names(rev(pri_pri)));levels(df_qpen_process$primer)<-rev(pri_pri)
+
+p_qpen_process<- ggbarplot(df_qpen_process,x="primer",y="value",fill="variable", stat="identity",color="white",size=0,width=0.7) +
+  facet_wrap(~Habitat, ncol = 1, strip.position = "left") +
+  coord_flip() +
+  scale_y_continuous(breaks = seq(0, 1, by = 0.25)) +
+  labs(x = "", y = "Relative Importance", fill="") + theme_light() + theme(legend.position = "top") + # scale_fill_npg() 
+  scale_fill_manual(values = c("#f8c011","#03559b" ,"#f3754c", "#5fc8c9", "#51586f")) +
+  theme(legend.text = element_text(size=8),
+        legend.key.size = unit(0.4, 'cm')) +guides(fill=guide_legend(nrow=2,ncol=3))
+##
+
+
+
+
+neutral_results_v4<-list()
+neutral_results_v5v7<-list()
+neutral_results_ratio<-list();neutral_results_ratio[[1]]<-list();neutral_results_ratio[[2]]<-list()
+for (i in levels(group$Habitat)){
+  tmp_physeq_sub<- subset_samples(physeq_v4,Habitat==i) ; tmp_physeq_sub<-prune_taxa(taxa_sums(tmp_physeq_sub)>0, tmp_physeq_sub)
+  tmp<-tmp_physeq_sub %>% otu_table() %>% as.data.frame()
+  neutral_results_v4[[i]] <-neutral_plot_new(tmp,combine_subview = F, point_size = 2) + 
+    theme(axis.text=element_text(size=6), text=element_text(size=8), axis.title = element_blank()) +
+    theme(axis.line.x = element_line(size = 0.75), axis.line.y = element_line(size = 0.75))+
+    labs( x="", y="", title=i)+
+    theme(plot.title = element_textbox(hjust = 0.5, margin = margin(t = 5, b = 5) ,size=10))
+  # neutral_results_ratio[[1]][[i]]<-neutral_plot_new(tmp,get_subview = T)
+  
+  tmp_physeq_sub<- subset_samples(physeq_v5v7,Habitat==i) ; tmp_physeq_sub<-prune_taxa(taxa_sums(tmp_physeq_sub)>0, tmp_physeq_sub)
+  tmp<-tmp_physeq_sub %>% otu_table() %>% as.data.frame()
+  neutral_results_v5v7[[i]] <-neutral_plot_new(tmp,combine_subview = F, point_size = 2) + 
+    theme(axis.text=element_text(size=6), text=element_text(size=8), axis.title = element_blank()) +
+    theme(axis.line.x = element_line(size = 0.75), axis.line.y = element_line(size = 0.75))
+  labs( x="", y="", title=i)+
+    theme(plot.title = element_textbox(hjust = 0.5, margin = margin(t = 5, b = 5) ,size=10))
+  # neutral_results_ratio[[2]][[i]]<-neutral_plot_new(tmp,get_subview = T)
+}
+
+p_neutral<-ggarrange(
+  ggarrange(neutral_results_v4[[1]],neutral_results_v4[[2]],neutral_results_v4[[3]],neutral_results_v4[[4]],neutral_results_v4[[5]],          ncol = 5),
+  ggarrange(neutral_results_v5v7[[1]],neutral_results_v5v7[[2]],neutral_results_v5v7[[3]],neutral_results_v5v7[[4]],neutral_results_v5v7[[5]],ncol = 5), 
+  nrow = 2 
+) %>% annotate_figure(left="Occurrence Frequency", bottom="Log-transformed Mean Relative Abundance")
+
+# p_neutral_ratio<-ggarrange(
+#   ggarrange(neutral_results_ratio[[1]][[1]],neutral_results_ratio[[1]][[2]],neutral_results_ratio[[1]][[3]],neutral_results_ratio[[1]][[4]],neutral_results_ratio[[1]][[5]],          ncol = 5),
+#   ggarrange(neutral_results_ratio[[2]][[1]],neutral_results_ratio[[2]][[2]],neutral_results_ratio[[2]][[3]],neutral_results_ratio[[2]][[4]],neutral_results_ratio[[2]][[5]],ncol = 5),
+#   nrow = 2
+# )
+# ggsave(p_neutral_ratio,filename = "p_neutral_ratio.pdf")
+
+
+
+##抽平没影响的
+physeq<-physeq_v4
+t_otu<-as.data.frame(t(otu_table(physeq)))
+group<-sample_data(physeq)[,c("Habitat","ALL_TYPE")]  %>% as.matrix() %>% as.data.frame()
+library(NST)
+tnst.v4=tNST(comm=t_otu, group=group, dist.method="jaccard",
+             abundance.weighted=TRUE, rand=1000,
+             nworker=20, null.model="PF", between.group=TRUE,
+             SES=TRUE, RC=TRUE)
+tnst.v4[["index.grp"]]
+
+physeq<-physeq_v5v7
+t_otu<-as.data.frame(t(otu_table(physeq)))
+group<-sample_data(physeq)[,c("Habitat","ALL_TYPE")] %>% as.matrix() %>% as.data.frame()
+library(NST)
+tnst.v5v7=tNST(comm=t_otu, group=group, dist.method="jaccard",
+               abundance.weighted=TRUE, rand=1000,
+               nworker=20, null.model="PF", between.group=TRUE,
+               SES=TRUE, RC=TRUE)
+tnst.v5v7[["index.grp"]]
+
+df_tnst<-rbind(tnst.v4[["index.grp"]],tnst.v5v7[["index.grp"]])
+df_tnst$primer<-c(rep("V4",5),rep("V5-V7",5)) %>% factor(levels=c("V5-V7","V4"))
+df_tnst<-df_tnst %>% mutate(Stochasticity=NST.i.ruzicka,Determinism=1-NST.i.ruzicka, Habitat=group) %>% select(Habitat,Stochasticity,Determinism,primer) %>% melt()
+df_tnst$Habitat<-factor(df_tnst$Habitat, levels= (levels(sample_data(physeq_v4)$"Habitat")))
+p_tnst<-df_tnst %>% ggplot() + 
+  geom_bar(aes(x=primer,y=value,fill=variable), stat="identity",width=0.7) +facet_wrap(~Habitat, ncol = 1, strip.position = "left") +
+  coord_flip() +
+  scale_y_continuous(breaks = seq(0, 1, by = 0.25)) +
+  labs(x = "", y = "Normalized Stochasticity Ratio",fill="") + scale_fill_npg() +theme_light() +theme(legend.position = "top", plot.background = element_blank())  +
+  theme(legend.text = element_text(size=8),legend.key.size = unit(0.4, 'cm'))
+
+
+p_qpen<-ggarrange(p_bnti,p_rcbray,p_qpen_process,p_tnst,nrow =  1 ,align = "h");p_qpen
+# ggarrange(p_bnti+theme_classic2(),p_rcbray+theme_classic2(),p_qpen_process+theme_classic2(),p_tnst+theme_classic2(),nrow =  1 ,align = "h")
+# ggarrange(p_bnti+theme_bw(),p_rcbray+theme_bw(),p_qpen_process+theme_bw(),p_tnst+theme_bw(),nrow =  1 ,align = "h")
+##########################################neutral_plot
+
+
+# ggsave(p_qpen,width=14,height=6,filename = "figure_3_p_qpen.pdf")
+# ggsave(p_neutral,width=28,height=10,filename = "figure_3_p_neutral.pdf")
+tmp<-ggarrange(p_qpen, p_neutral, nrow = 2, heights = c(1, 1) )+theme(plot.margin =unit(c(1,1,1,1), "cm") ) 
+ggsave(tmp,  filename = "figure3_update.pdf",width = 13,height = 11)
+```
+
+```{r network}
+
+net<-function(comun){
+  require(Hmisc)
+  require(igraph)
+  result<-list()
+  b_to<-rcorr(as.matrix(comun),type="spearman")
+  r<-b_to$r
+  p<-b_to$P
+  r[abs(r)<0.6]<-0
+  p<-p.adjust(p, method="none") 
+  q<-matrix(p,nrow=ncol(comun),ncol=ncol(comun))
+  q[q<0.01]<-1
+  q[q>0.01&q<1]<-0
+  gg<-r*q
+  diag(gg) <- 0
+  result[["positive_ratio"]] <- (sum(gg>0))/sum((gg>0|gg<0))
+  gg[gg<0]<- -gg[gg<0]
+  g <- graph.adjacency(gg, weighted=TRUE, mode="undirected")
+  result[["net"]] <- simplify(g)
+  return(result)
+}
+
+network<-list()
+network_properties<-matrix(ncol = 11 ) %>% as.data.frame()
+
+
+group_head<-"Habitat"
+group_name<-c("Water", "Sediment", "Soil","Leaf","Gut")
+
+
+for ( pri in 1:2){
+  physeq<-list_physeq[[pri]] #%>% rarefy_physeq(depth = 10000)
+  for (i in 1:length(group_name)){ #########
+    tmp_t_otu<-prune_samples( sample_data( physeq )[[ group_head ]]==group_name[i],physeq) %>% otu_table() %>% as.data.frame() %>% t() %>% as.data.frame()
+    # tmp_t_otu<-tmp_t_otu[,colMeans(tmp_t_otu)/rowSums(tmp_t_otu)[1]>0.0001]
+    aa<-tmp_t_otu/rowSums(tmp_t_otu)
+    tmp_t_otu<-tmp_t_otu[,colMeans(aa)>0.0001]
+    tmp<-net(tmp_t_otu)  # Error in double(p * p) : vector size cannot be NA   too many OTU
+    tmp___<-tmp[["net"]]; tmp___<-delete.vertices(tmp___, degree(tmp___)==0)
+    network[[i]]<-tmp___
+    print(i)
+    network_properties[i+ (pri-1)*5, ] <-
+      c(
+        group_name[i],
+        c("V4", "V5-V7")[pri],
+        length(V(network[[i]])),
+        length(E(network[[i]])),
+        length(E(network[[i]])) / length(V(network[[i]])),
+        average.path.length(network[[i]]),
+        transitivity(network[[i]]),
+        diameter(network[[i]]),
+        graph.density(network[[i]]),
+        modularity(network[[i]], membership(cluster_fast_greedy(network[[i]]))),
+        tmp[["positive_ratio"]]#, small_world_coefficient(network[[i]])
+      )
+  }
+}
+colnames(network_properties)<-c("Habitat","primer","Nodes","Degree","Average Degree","Average Path Length","Clustering coefficient","Diameter","Graph Density","Modularity","Positive Ratio")
+
+
+df_net<-network_properties %>% select(-`Positive Ratio`,) %>% melt(id = c(1:2))
+df_net$value<-as.numeric(df_net$value)
+df_net$Habitat <- factor(df_net$Habitat, levels = (levels(group$"Habitat")))
+df_net$primer <- factor(df_net$primer, levels=c("V5-V7","V4"))
+
+ggbarplot(df_net,x="primer",y="value",fill="primer", stat="identity",color="white") +
+  # facet_wrap(~Habitat+variable, ncol = 9, strip.position = "left", scales = "free") +
+  facet_grid(Habitat ~ variable, switch = "y", scales = "free") +
+  coord_flip() +
+  labs(x = "", y = "") + theme_light() + theme(legend.position = "top") + # scale_fill_npg() 
+  scale_fill_manual(values = rev(c("#fe827c", "#80b9e1")))  +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 4),trans = "log10") 
+
+
+
+list_gg<-list()
+for(i in unique(df_net$variable)){
+  if( i %in% c("Nodes", "Degree", "Small World Coefficient" )) {
+    list_gg[[i]]<-ggbarplot( df_net %>% filter(variable ==i),x="primer",y="value",fill="primer", stat="identity",color="white") +
+      facet_wrap(~Habitat, ncol = 1, strip.position = "left") +
+      coord_flip() +
+      labs(x = "", y = "") + theme_light() + theme(legend.position = "top") + 
+      scale_fill_manual(values = rev(c("#fe827c", "#80b9e1")))  +
+      scale_y_continuous(breaks = c(1e2,1e4,1e6),trans = "log10") +
+      theme(
+        axis.text.y=element_blank(),
+        plot.background=element_blank(),
+        plot.margin=unit(c(1,0,1,0), "cm")) + labs(title=i) + 
+      theme(plot.title = element_textbox(hjust = 0.5, margin = margin(t = 5, b = 5) ,size=10))+
+      scale_fill_manual(values = c('V4'="#fe827c",'V5-V7'= "#80b9e1") ,
+                        breaks=c('V4', 'V5-V7'),
+                        labels=c('V4', 'V5-V7'))
+  }  else {
+    list_gg[[i]]<-ggbarplot( df_net %>% filter(variable ==i),x="primer",y="value",fill="primer", stat="identity",color="white") +
+      facet_wrap(~Habitat, ncol = 1, strip.position = "left") +
+      coord_flip() +
+      labs(x = "", y = "") + theme_light() + theme(legend.position = "top") +
+      scale_fill_manual(values = rev(c("#fe827c", "#80b9e1")))  +
+      scale_y_continuous(breaks = scales::pretty_breaks(n = 2))  +
+      theme(
+        strip.text.y = element_blank(),
+        strip.background = element_blank(),
+        axis.text.y=element_blank(),
+        plot.background=element_blank(),
+        plot.margin=unit(c(1,0,1,0), "cm"))+ labs(title=i) + 
+      theme(plot.title = element_textbox(hjust = 0.5, margin = margin(t = 5, b = 5) ,size=10 ))+
+      scale_fill_manual(values = c('V4'="#fe827c",'V5-V7'= "#80b9e1") ,
+                        breaks=c('V4', 'V5-V7'),
+                        labels=c('V4', 'V5-V7'))
+  } 
+  if( i %in% c("Average Degree")){list_gg[[i]] <- list_gg[[i]] + scale_y_continuous(breaks = c(4,16,64,256),trans = "log2") }
+  if( i %in% c("Degree", "Small World Coefficient" )){list_gg[[i]] <- list_gg[[i]] + theme(strip.text.y = element_blank(),strip.background = element_blank()) }
+  if( i %in% c("Small World Coefficient" )){list_gg[[i]] <- list_gg[[i]] + scale_y_continuous(breaks = c(0,1,10,100),trans = "log10")}
+  
+}
+
+
+p_net<-ggarrange(plotlist = list_gg,
+                 nrow = 1,
+                 hjust = T,
+                 common.legend = T
+);p_net
+ggsave("p_net_update.pdf",p_net,height=6,width = 12)
+```
+
+```{r c_scores}
+library(EcoSimR)
+physeq<-list_physeq[["v4"]]
+group<-microbiome::meta(physeq)
+list_c_scores_bac<-list()
+for (i in group){
+  otu<-otu_table(physeq %>% subset_samples(ALL_TYPE==i))
+  otu_binary<-otu;otu_binary[otu_binary>0]<-1
+  otu_binary<-otu_binary[rowSums(otu_binary)>3,]
+  list_c_scores_bac[[i]] <- cooc_null_model(as.matrix(otu_binary), algo="sim9")
+}
+
+group_head<-"Habitat"
+group_name<-c("Water", "Sediment", "Soil","Leaf","Gut")
+list_c_scores<-list()
+for( pri in c("v4", "v5v7")){
+  physeq<- list_physeq[[pri]] #%>% rarefy_physeq(depth = 10000)
+  list_c_scores[[pri]]<-list()
+  for (i in group_name) {
+    otu<-otu_table(physeq %>% subset_samples(Habitat==i))
+    otu_binary<-otu;otu_binary[otu_binary>0]<-1
+    otu_binary<-otu_binary[rowSums(otu_binary)>3,]
+    list_c_scores[[pri]][[i]] <- cooc_null_model(as.matrix(otu_binary), algo="sim9")
+  }
+}
+
+df_cscores<-foreach(pri=  c("v4", "v5v7"), .combine = rbind) %do% {
+  tmp<-list()
+  for (i in group_name) {
+    tmp_nullmodObj <- list_c_scores[[pri]][[i]]
+    tmp[[i]] <- c(
+      OBS = tmp_nullmodObj$Obs,
+      SIM = mean(tmp_nullmodObj$Sim),
+      SES = (tmp_nullmodObj$Obs - mean(tmp_nullmodObj$Sim)) / sd(tmp_nullmodObj$Sim)
+    )
+  }
+  df_cscores <-
+    do.call(rbind, tmp) %>% data.frame() %>% mutate(primer = pri_pri[pri])
+  df_cscores$site <- rownames(df_cscores)
+  return(df_cscores)
+}
+
+
+df_cscores<-melt(df_cscores)
+df_cscores<-df_cscores %>% mutate(value=log2(value+1)) 
+df_cscores$site<-factor(df_cscores$site,levels=group_name)
+ggplot(df_cscores, aes(x=site))+
+  geom_bar(data=df_cscores%>% filter(variable=="OBS"),aes(y=value),stat = "identity",alpha=0.5,width=0.6)+
+  geom_bar(data=df_cscores%>% filter(variable=="SIM"),aes(y=value),stat = "identity",alpha=1,width=0.3,fill="skyblue")+
+  geom_point(data=df_cscores%>% filter(variable=="SES"),aes(y=value/2),stat = "identity",color="#e21818",shape=15,size=3)+
+  scale_y_continuous(
+    name = "log-transformed C-scores",
+    sec.axis = sec_axis(~.*2, name="Standardized Effect Size"), expand = expansion(0.3)
+  )+theme_light()+theme(aspect.ratio = .5,
+                        axis.text.x = element_text(angle = 45,hjust = 1,vjust = 1))+
+  labs(x="")+
+  facet_grid(row = vars(primer))
+ggsave("C-scores_update.pdf",height=4,width=6)
+```
+
+```{r primer silva}
+library(foreach)
+tmp_11<-foreach(i = 0:2, .combine = rbind) %do% {
+  tmp<-read.csv(paste0("silva/V4mis",i,".csv"),sep = ";") %>% separate(col = "taxonomy",sep = ";",into = c("emm","Kingdom","Phylum","Class","Order","Family","Genus","Species"))
+  tmp[(tmp$Kingdom=="Bacteria")& (tmp$Phylum==""),][,5]<-""
+  tmp[(tmp$Kingdom=="Bacteria")& (tmp$Phylum==""),][,4]<-"All Bacteria"
+  tmp[(tmp$Kingdom=="Archaea")& (tmp$Phylum==""),][,5]<-""
+  tmp[(tmp$Kingdom=="Archaea")& (tmp$Phylum==""),][,4]<-"All Archaea"
+  tmp<-tmp %>% filter(!is.na(Phylum),Class=="") %>% mutate(mismatch_each=i,uncoverage=1-coverage) %>% mutate(primers="V4")
+  return(tmp)
+}
+
+tmp22<-foreach(i = 0:2, .combine = rbind) %do% {
+  tmp<-read.csv(paste0("silva/V5V7mis",i,".csv"),sep = ";") %>% separate(col = "taxonomy",sep = ";",into = c("emm","Kingdom","Phylum","Class","Order","Family","Genus","Species"))
+  tmp[(tmp$Kingdom=="Bacteria")& (tmp$Phylum==""),][,5]<-""
+  tmp[(tmp$Kingdom=="Bacteria")& (tmp$Phylum==""),][,4]<-"All Bacteria"
+  tmp[(tmp$Kingdom=="Archaea")& (tmp$Phylum==""),][,5]<-""
+  tmp[(tmp$Kingdom=="Archaea")& (tmp$Phylum==""),][,4]<-"All Archaea"
+  
+  tmp<-tmp %>% filter(!is.na(Phylum),Class=="") %>% mutate(mismatch_each=i,uncoverage=1-coverage) %>% mutate(primers="V5V7")
+  return(tmp)
+}
+df_silva<-rbind(tmp_11,tmp22) %>% filter(Phylum %in% c(ztmp$Phylum[1:32], "All Bacteria", "All Archaea") )
+
+# df_silva %>% filter(mismatch_each==1) %>% 
+#   ggplot(mapping = aes(x=Phylum,y=coverage,fill=primers))+
+#   geom_bar(stat="identity")+
+#   facet_wrap(~primers,nrow=2)+theme(axis.text.x = element_text(angle = 90))
+
+df_silva %>% filter(mismatch_each==1, !(Phylum%in%c( "All Bacteria", "All Archaea")) ) %>% 
+  ggplot(mapping = aes(x= primers,y=coverage,fill=primers,group=Phylum))+
+  geom_bar(stat="identity",width = 0.7)+
+  facet_wrap(~Phylum,nrow=3)+theme(axis.text.x = element_text(angle = 0))+
+  scale_fill_manual(values = c("#fe827c", "#80b9e1"))+
+  theme(legend.position = "none")+labs(x="",y="Coverage (%)")
+ggsave("p_silva_1.pdf",height = 6,width = 13)
+
+df_silva %>% filter(mismatch_each==2, !(Phylum%in%c( "All Bacteria", "All Archaea")) ) %>% 
+  ggplot(mapping = aes(x= primers,y=coverage,fill=primers,group=Phylum))+
+  geom_bar(stat="identity",width = 0.7)+
+  facet_wrap(~Phylum,nrow=3)+theme(axis.text.x = element_text(angle = 0))+
+  scale_fill_manual(values = c("#fe827c", "#80b9e1"))+
+  theme(legend.position = "none")+labs(x="",y="Coverage (%)")
+ggsave("p_silva_2.pdf",height = 6,width = 13)
+```
