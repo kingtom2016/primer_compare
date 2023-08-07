@@ -383,7 +383,42 @@ ggsave("figure2_update.pdf",plot = tmp,height = 10,width = 11.5)
 ```
 
 ```{r niche characterization}
-list_physeq<-list();list_physeq[["v4"]]<-physeq_v4;list_physeq[["v5v7"]]<-physeq_v5v7
+Ocom<-function (otu_table, method = "morisita", filter = 2e-05, paral = T, 
+    cores = 12) 
+{
+    t_otu <- t(otu_table)
+    t_otu <- t_otu[, colMeans(t_otu/(rowSums(t_otu))) > filter]
+    if (paral) {
+        niche_overlap_matrix <- niche.overlap.paral(t_otu, cores = cores)
+        gc()
+    }
+    else {
+        niche_overlap_matrix <- niche.overlap.noparal(t_otu)
+    }
+    print("niche_overlap_matrix calculation complete")
+    overlap_list <- list()
+    niche_over <- vector()
+    for (i in 1:dim(t_otu)[1]) {
+        tmp <- niche_overlap_matrix[as.vector(t_otu[i, ] != 0), 
+            as.vector(t_otu[i, ] != 0)]
+        overlap_list[[i]] <- tmp[lower.tri(tmp)]
+        niche_over[i] <- mean(overlap_list[[i]])
+    }
+    names(niche_over) <- rownames(t_otu)
+    return(niche_over)
+}
+
+Bcom<-function(otu, filter=2e-5){
+    library(spaa)
+    t_otu<-t(otu)
+    t_otu<-t_otu[,colSums(t_otu / (rowSums(t_otu))) > filter]
+    otu_niche_breadth <- niche.width(t_otu, "levins")
+    otu_binary <- t(t_otu)
+    otu_binary[otu_binary > 0] <- 1
+    otu_binary <- otu_binary * as.numeric(otu_niche_breadth)
+    return(colMeans(otu_binary, na.rm = T))
+}
+
 niche_b_table<-list()
 group_head<-"Habitat"
 group_name<-c("Water", "Sediment", "Soil","Leaf","Gut")
