@@ -225,7 +225,7 @@ p_NMDS_protest<-cowplot::plot_grid(
 
 
 
-###使用都有的属
+###use genera shared
 keep_taxa<-intersect(tax_table(tmp1)[,level],tax_table(tmp2)[,level])
 physeq<- prune_taxa(keep_taxa, physeq)
 otu_table(physeq)<- microbiome::abundances(physeq,"compositional") %>% otu_table(taxa_are_rows = T)
@@ -263,13 +263,7 @@ beta_pattern_results<-beta_pattern_results %>% mutate(Habitat = factor(Habitat, 
 df_beta_pattern_results<- melt(beta_pattern_results,id.vars = c("Habitat","primer"))
 df_beta_pattern_results$primer<-factor(df_beta_pattern_results$primer, levels=c("V5-V7","V4"))
 
-# p_beta_pattern<- ggbarplot(data = df_beta_pattern_results, x = "primer", y = "value", fill = "variable", group = "Habitat", color="white") + facet_wrap(~Habitat, ncol = 1, strip.position = "left") +
-#   coord_flip() +
-#   scale_y_continuous(breaks = seq(0, 1, by = 0.25)) +
-#   labs(y = "Relative Complement", x = "",fill="")  + theme_light() + theme(legend.position = "top") +
-#   scale_fill_manual(values=rev(c("#d32028","#385989","#7fa5b8"))) 
-# + scale_fill_npg() 
-# + geom_line(aes(group= (sample_name)),colour="#9C9C9C",alpha=0.4)
+
 p_beta_pattern<- ggplot(data = df_beta_pattern_results,aes( x = primer, y = value, fill=variable, group = Habitat, pattern=variable)) +
   geom_bar_pattern(position = "stack",
                    color = "#515151", 
@@ -303,12 +297,6 @@ beta_pattern_results<-beta_pattern_results %>% mutate(Habitat = factor(Habitat, 
 df_beta_pattern_results<- melt(beta_pattern_results,id.vars = c("Habitat","primer"))
 df_beta_pattern_results$primer<-factor(df_beta_pattern_results$primer, levels=c("V5-V7","V4"))
 
-# p_beta_pattern_SET<- 
-#   ggbarplot(data = df_beta_pattern_results, x = "primer", y = "value", fill = "variable", group = "Habitat", color="white") + facet_wrap(~Habitat, ncol = 1, strip.position = "left") + 
-#   coord_flip() +
-#   scale_y_continuous(breaks = seq(0, 1, by = 0.25)) +
-#   labs(y = "Relative Complement", x = "",fill="")  + theme_light() + theme(legend.position = "top") +
-#   scale_fill_manual(values=rev(c("#a9a9a9","#e5ad2e","#7fa5b8"))) +theme(plot.background = element_rect(fill = "transparent",colour = NA))
 
 p_beta_pattern_SET<- ggplot(data = df_beta_pattern_results,aes( x = primer, y = value, fill=variable, group = Habitat, pattern=variable)) +
   geom_bar_pattern(position = "stack",
@@ -368,18 +356,6 @@ tmp<-ggarrange(ggarrange(p_NMDS_all,p_NMDS_protest,nrow = 1,widths =c(2.1,5)),
 ggsave("figure2_update.pdf",plot = tmp,height = 10,width = 11.5)
 
 
-
-
-
-# tmp1<-physeq_v4_genus
-# tmp2<-physeq_v5v7_genus
-# level="Genus"
-# physeq<-merge_phyloseq_union( change_physeq_otu2rank_sample_name(tmp1, T, T, level, "_v4" ,add_additional_col="primers",col_info="v4" ),
-#                               change_physeq_otu2rank_sample_name(tmp2, T, T, level, "_v5v7",add_additional_col="primers",col_info="v5v7")
-# )
-# otu_table(physeq)<- microbiome::abundances(physeq,"compositional") %>% otu_table(taxa_are_rows = T)
-# tmp<-adonis2( phyloseq::distance(physeq, method = "bray") ~ Habitat+Location+primers+Habitat/Location+Habitat/primer, data =  as(sample_data(physeq), "data.frame"), perm=9999)
-# write.csv(tmp,file = "adonis_all.csv")
 ```
 
 ```{r niche characterization}
@@ -503,17 +479,6 @@ p_niche_ocom<-ggscatter(data = df_niche, x = "primer", y = "V1", group = "Habita
 tmp<-ggarrange(p_niche_bcom,p_niche_ocom,ncol = 1, common.legend =  T, align = "hv" )
 ggsave("Figure_niche_update.pdf", plot = tmp,height = 6,width = 8)
 
-
-i<-5
-a<-niche_Ocom_table[[1]][[2]] 
-tmp<-cbind(a,data.frame(group=group[rownames(a),]$ALL_TYPE) )
-compare_means(data=tmp,V1~group)
-a<-niche_Ocom_table[[2]][[2]] 
-tmp<-cbind(a,data.frame(group=group[rownames(a),]$ALL_TYPE) )
-compare_means(data=tmp,V1~group)
-
-a<-rbind(niche_Ocom_table[[1]][["Sediment"]], niche_Ocom_table[[2]][["Sediment"]])
-rstatix::cohens_d(V1~primer,data=a)
 ```
 
 ```{r assembly}
@@ -686,7 +651,7 @@ p_neutral<-ggarrange(
 
 
 
-##抽平没影响的
+##
 physeq<-physeq_v4
 t_otu<-as.data.frame(t(otu_table(physeq)))
 group<-sample_data(physeq)[,c("Habitat","ALL_TYPE")]  %>% as.matrix() %>% as.data.frame()
