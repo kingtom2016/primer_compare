@@ -74,13 +74,35 @@ p_phylum_asv_dist<-ggplot(prevelancedf_ori, aes(TotalAbundance, Prevalence_Perc,
 
 
 
+alpha<-function (t_otu, tree = NULL, base = exp(1)) {
+    library(picante)
+    library(vegan)
+    x <- t_otu
+    est <- estimateR(x)
+    Richness <- est[1, ]
+    Chao1 <- est[2, ]
+    ACE <- est[4, ]
+    Shannon <- vegan::diversity(x, index = "shannon", base = base)
+    Simpson <- vegan::diversity(x, index = "simpson")
+    Pielou <- Shannon/log(Richness, base)
+    goods_coverage <- 1 - rowSums(x == 1)/rowSums(x)
+    reads_number <- rowSums(t_otu)
+    result <- data.frame(Richness, Shannon, Simpson, Pielou, 
+        Chao1, ACE, goods_coverage)
+    if (!is.null(tree)) {
+        PD_whole_tree <- pd(x, tree, include.root = FALSE)[1]
+        names(PD_whole_tree) <- "PD_whole_tree"
+        result <- cbind(result, PD_whole_tree)
+    }
+    result
+}
 
 physeq<-physeq_v4
-tmp1<-jintao::alpha(t_otu = t(otu_table(physeq)),phy_tree(physeq)) ; tmp1$primer<-"V4"; tmp1$sample_name<-rownames(tmp1)
+tmp1<-alpha(t_otu = t(otu_table(physeq)),phy_tree(physeq)) ; tmp1$primer<-"V4"; tmp1$sample_name<-rownames(tmp1)
 tmp1$hill_1<- hillR::hill_taxa(t(otu_table(physeq)), q = 1)
 tmp1$hill_2<- hillR::hill_taxa(t(otu_table(physeq)), q = 2)
 physeq<-physeq_v5v7
-tmp2<-jintao::alpha(t_otu = t(otu_table(physeq)),phy_tree(physeq));tmp2$primer<-"V5-V7";tmp2$sample_name<-rownames(tmp2)
+tmp2<-alpha(t_otu = t(otu_table(physeq)),phy_tree(physeq));tmp2$primer<-"V5-V7";tmp2$sample_name<-rownames(tmp2)
 tmp2$hill_1<- hillR::hill_taxa(t(otu_table(physeq)), q = 1)
 tmp2$hill_2<- hillR::hill_taxa(t(otu_table(physeq)), q = 2)
 alpha_resuls<-rbind(tmp1,tmp2)
